@@ -1,0 +1,123 @@
+import re
+import pandas as pd
+from PIL import Image
+import pytesseract
+import os
+import sqlite3
+
+# Define the name of our database file
+DB_NAME = 'expenses.db'
+
+class ReceiptProcessor:
+    def __init__(self, tesseract_path: str = None):
+        # ... (Same initialization code as before) ...
+        if tesseract_path:
+            pytesseract.pytesseract.tesseract_cmd = tesseract_path
+        
+        try:
+            pytesseract.get_tesseract_version()
+            print("Tesseract engine found and ready.")
+        except pytesseract.TesseractNotFoundError:
+            print("Tesseract engine not found.")
+
+    def extract_text_from_image(self, image_path: str) -> str | None:
+        # ... (Same code as before) ...
+        if not os.path.exists(image_path):
+            print(f"Error: Image file not found at {image_path}")
+            return None
+        try:
+            img = Image.open(image_path)
+            text = pytesseract.image_to_string(img)
+            return text
+        except Exception as e:
+            print(f"Error during OCR processing: {e}")
+            return None
+
+    def parse_receipt_text(self, text: str) -> dict:
+        # ... (Same parsing code as before) ...
+        total_match = re.search(r'TOTAL\s+\$?\s*([\d.]+)', text, re.IGNORECASE)
+        date_match = re.search(r'\d{1,2}/\d{1,2}/\d{2,4}', text)
+        date = pd.to_datetime(date_match.group(0), errors='coerce') if date_match else None
+        amount = float(total_match.group(1)) if total_match else None
+        vendor = 'Unknown'
+        return {
+            'date': date.strftime('%Y-%m-%d') if date else None, 
+            'amount': amount, 
+            'vendor': vendor, 
+            'category': 'Uncategorized'
+        }
+
+    def categorize_expense(self, expense_data: dict, vendor_rules: dict) -> dict:
+        # ... (Same categorization code as before) ...
+        vendor = expense_data.get('vendor', '').lower()
+        for category, vendors in vendor_rules.items():
+            if vendor in vendors:
+                expense_data['category'] = category
+                break
+        return expense_data
+
+    def create_table(self):
+        """
+        Connects to the database and creates the 'expenses' table if it doesn't exist.
+        """
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS expenses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT,
+                amount REAL,
+                vendor TEXT,
+                category TEXT
+            )
+        ''')
+        conn.commit()
+        conn.close()
+        print(f"Database table 'expenses' created or already exists in {DB_NAME}.")
+
+    def add_expense_to_db(self, expense_data: dict):
+        """
+        Inserts a new expense record into the 'expenses' table.
+        
+        Args:
+            expense_data (dict): A dictionary containing the expense details.
+        """
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO expenses (date, amount, vendor, category)
+            VALUES (?, ?, ?, ?)
+        ''', (expense_data['date'], expense_data['amount'], expense_data['vendor'], expense_data['category']))
+        conn.commit()
+        conn.close()
+        print("Expense added to the database.")
+
+# --- Example Usage ---
+
+# 1. Initialize the class.
+processor = ReceiptProcessor()
+
+# 2. Create the database table.
+processor.create_table()
+
+# 3. Simulate a processed expense (from Step 3).
+processed_expense = {
+    'date': '2025-08-09',
+    'amount': 11.38,
+    'vendor': 'whole foods',
+    'category': 'Groceries'
+}
+
+# 4. Add the expense to the database.
+processor.add_expense_to_db(processed_expense)
+
+# 5. You can optionally check the database to see the record.
+# This code is for demonstration, you'll see a file named 'expenses.db' created.
+conn = sqlite3.connect(DB_NAME)
+cursor = conn.cursor()
+cursor.execute('SELECT * FROM expenses')
+records = cursor.fetchall()
+print("\nRecords in database:")
+for record in records:
+    print(record)
+conn.close()

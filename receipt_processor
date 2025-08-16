@@ -1,0 +1,83 @@
+# receipt_processor.py
+import pytesseract
+from PIL import Image
+import os
+import re
+import pandas as pd
+import sqlite3
+
+class ReceiptProcessor:
+    def __init__(self, tesseract_path: str = None) -> None:
+        if tesseract_path:
+            pytesseract.pytesseract.tesseract_cmd = tesseract_path
+        
+        try:
+            pytesseract.get_tesseract_version()
+            print("Tesseract OCR engine found and ready to use! ✅")
+        except pytesseract.TesseractNotFoundError:
+            print("Error: Tesseract OCR engine was not found. Please ensure it's installed.")
+            print("You may need to provide the full file path to the tesseract.exe in the constructor.")
+
+    def extract_text_from_image(self, image_path: str) -> str | None:
+        if not os.path.exists(image_path):
+            print(f"Error: Image file not found at '{image_path}'")
+            return None
+        try:
+            img = Image.open(image_path)
+            text = pytesseract.image_to_string(img)
+            return text
+        except Exception as e:
+            print(f"An unexpected error occurred during OCR processing: {e}")
+            return None
+
+    def parse_receipt_text(self, text: str) -> dict:
+        total_match = re.search(r'TOTAL\s+\$?\s*([\d.]+)', text, re.IGNORECASE)
+        date_match = re.search(r'\d{1,2}/\d{1,2}/\d{2,4}', text)
+        date = pd.to_datetime(date_match.group(0), errors='coerce') if date_match else None
+        amount = float(total_match.group(1)) if total_match else None
+        vendor = 'Unknown'
+        return {
+            'date': date.strftime('%Y-%m-%d') if date else None, 
+            'amount': amount, 
+            'vendor': vendor, 
+            'category': 'Uncategorized'
+        }
+
+    def categorize_expense(self, expense_data: dict, vendor_rules: dict) -> dict:
+        vendor = expense_data.get('vendor', '').lower()
+        for category, vendors in vendor_rules.items():
+            if vendor in vendors:
+                expense_data['category'] = category
+                break
+        return expense_data
+
+    def create_table(self, db_name: str) -> None:
+        conn = sqlite3.connect(db_name)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS expenses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT,
+                amount REAL,
+                vendor TEXT,
+                category TEXT
+            )
+        ''')
+        conn.commit()
+        conn.close()
+    
+    def add_expense_to_db(self, expense_data: dict, db_name: str) -> None:
+        conn = sqlite3.connect(db_name)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO expenses (date, amount, vendor, category)
+            VALUES (?, ?, ?, ?)
+        ''', (expense_data['date'], expense_data['amount'], expense_data['vendor'], expense_data['category']))
+        conn.commit()
+        conn.close()
+
+    def get_all_expenses(self, db_name: str) -> pd.DataFrame:
+        conn = sqlite3.connect(db_name)
+        expenses_df = pd.read_sql_query("SELECT * FROM expenses ORDER BY date DESC", conn)
+        conn.close()
+        return expenses_df
